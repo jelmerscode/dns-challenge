@@ -77,7 +77,7 @@
 //!
 //! Make nice commits.
 //!
-//! For a better(?) explanation read section 4.4.1 of RFC 1035: https://www.ietf.org/rfc/rfc1035.txt
+//! For a better(?) explanation read section 4.1.4 of RFC 1035: https://www.ietf.org/rfc/rfc1035.txt
 //!
 //! NOTE: You're only allowed to use the Rust standard library, ob-vi-ous-ly.
 
@@ -101,7 +101,7 @@ mod test {
 
     #[test]
     fn simple_backref() {
-        let pkt = b"\x06google\x03com\0\x03www\xC0\0x00";
+        let pkt = b"\x06google\x03com\0\x03www\xC0\x00";
 
         assert_eq!(
             decode_dns_name(&pkt[12..], &pkt[..]).as_deref().unwrap(),
