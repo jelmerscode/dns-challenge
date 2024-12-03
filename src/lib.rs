@@ -72,11 +72,11 @@
 //!
 //! ---
 //!
-//! Share your solution with us (Marc and Tamme) by making a MR on the repository "dns-challenge":
-//! https://tgrep.nl/tweedegolf/dns-challenge/.
-//!
+//! Share your solution with us (Marc and Tamme) by cloning this repository *privately*,
+//! and adding us as collaborators (@squell and @tdittr).
+//! 
 //! Make nice commits.
-//!
+//! 
 //! For a better(?) explanation read section 4.1.4 of RFC 1035: https://www.ietf.org/rfc/rfc1035.txt
 //!
 //! NOTE: You're only allowed to use the Rust standard library, ob-vi-ous-ly.
