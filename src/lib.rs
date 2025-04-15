@@ -72,9 +72,6 @@
 //!
 //! ---
 //!
-//! Share your solution with us (Marc and Tamme) by cloning this repository *privately*,
-//! and adding us as collaborators (@squell and @tdittr).
-//! 
 //! Make nice commits.
 //! 
 //! For a better(?) explanation read section 4.1.4 of RFC 1035: https://www.ietf.org/rfc/rfc1035.txt

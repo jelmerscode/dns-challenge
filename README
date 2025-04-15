@@ -2,9 +2,6 @@ DNS Challenge
 =============
 For explanation, see `src/lib.rs` or below.
 
-Share your solution with us (Marc and Tamme) by cloning this repository *privately*,
-and adding us as collaborators (@squell and @tdittr).
-
 For a better(?), or at least more authoritative explanation of the compression algorithm
 described below, read section 4.1.4 of RFC 1035: https://www.ietf.org/rfc/rfc1035.txt
 
