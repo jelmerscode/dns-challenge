@@ -79,7 +79,43 @@
 //! NOTE: You're only allowed to use the Rust standard library, ob-vi-ous-ly.
 
 pub fn decode_dns_name(input: &[u8], _backlog: &[u8]) -> Option<Box<[u8]>> {
-    todo!()
+    let mut index = 0;
+    let mut parts: Vec<u8> = Vec::new();
+    let mut no_of_parts = 0;
+
+    while index < input.len() {
+        // read the length of the part
+        let length = input[index] as usize;
+        index += 1;
+
+        match length {
+            0 => index = input.len(), // length byte indicates end of name
+            64.. => return None, // invalid length size
+            _ => {
+
+                if index + length + no_of_parts > 255 || index + length >= input.len() {
+                    // invalid length
+                    return None
+                }
+                if let Some(part) = input.get(index..(index + length)) {
+                    // if this isn't the first part, add a seperator
+                    if no_of_parts > 0 { parts.push(b'.') };
+                    parts.extend_from_slice(part);
+                    index += length;
+                    no_of_parts += 1;
+                } else {
+                    // specified range for part out of bounds
+                    return None;
+                }
+                    
+            }
+        }
+    }
+
+    match parts.len() {
+        0 => None, // name cannot be empty
+        _ => Some(parts.into_boxed_slice())
+    }
 }
 
 #[cfg(test)]
@@ -94,6 +130,20 @@ mod test {
             decode_dns_name(&input[..], &[]).as_deref().unwrap(),
             b"google.com"
         );
+    }
+
+    #[test]
+    fn empty() {
+        let input = b"";
+
+        assert!(decode_dns_name(&input[..], &[]).is_none());
+    }
+
+    #[test]
+    fn length_out_of_bounds() {
+        let input = b"\x03co\0";
+
+        assert!(decode_dns_name(&input[..], &[]).is_none());
     }
 
     #[test]
