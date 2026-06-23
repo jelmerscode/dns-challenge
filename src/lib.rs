@@ -78,43 +78,50 @@
 //!
 //! NOTE: You're only allowed to use the Rust standard library, ob-vi-ous-ly.
 
-pub fn decode_dns_name(input: &[u8], _backlog: &[u8]) -> Option<Box<[u8]>> {
-    let mut index = 0;
-    let mut parts: Vec<u8> = Vec::new();
-    let mut no_of_parts = 0;
+pub fn decode_dns_name(input: &[u8], backlog: &[u8]) -> Option<Box<[u8]>> {
+    if input.len() == 0 {
+        return None
+        
+    } else {
+        if input[0] == 0 {
+            Some([].into())
 
-    while index < input.len() {
-        // read the length of the part
-        let length = input[index] as usize;
-        index += 1;
+        } else if (input[0] & 0xc0) == 0xc0 {
+            // compression
+            if input.len() < 2 { // insufficent bytes for the indicator
+                None
+            } else {
+                // decode further from the indicator
+                let indicator = (((input[0] & 0x3f) as u16) << 8) + (input[1] as u16);
+                decode_dns_name(&backlog[(indicator as usize)..], backlog)
+            }
 
-        match length {
-            0 => index = input.len(), // length byte indicates end of name
-            64.. => return None, // invalid length size
-            _ => {
-
-                if index + length + no_of_parts > 255 || index + length >= input.len() {
-                    // invalid length
-                    return None
+        } else {
+            // normal part read
+            let length = input[0] & 0x3f;
+            // get the part from input
+            if let Some(part) = input.get(1..(length as usize)+1) {
+                // recursively read the rest of input
+                match decode_dns_name(&input[(length as usize +1)..], backlog) {
+                    Some(other_parts) => {
+                        if other_parts.len() > 0 {
+                            // add this part to the recursively read part seperated by a dot
+                            let mut name = part.to_vec();
+                            name.push(b'.');
+                            name.extend_from_slice(&other_parts);
+                            Some(name.into())
+                        } else {
+                            // recursion reached end of name
+                            Some(part.into())
+                        }
+                    },
+                    // there was nothing to read, so just return this part
+                    None => None
                 }
-                if let Some(part) = input.get(index..(index + length)) {
-                    // if this isn't the first part, add a seperator
-                    if no_of_parts > 0 { parts.push(b'.') };
-                    parts.extend_from_slice(part);
-                    index += length;
-                    no_of_parts += 1;
-                } else {
-                    // specified range for part out of bounds
-                    return None;
-                }
-                    
+            } else {
+                None
             }
         }
-    }
-
-    match parts.len() {
-        0 => None, // name cannot be empty
-        _ => Some(parts.into_boxed_slice())
     }
 }
 
