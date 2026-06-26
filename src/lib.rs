@@ -78,50 +78,117 @@
 //!
 //! NOTE: You're only allowed to use the Rust standard library, ob-vi-ous-ly.
 
+use std::collections::HashSet;
+
+#[derive(Debug, PartialEq)]
+pub enum DNSNameError {
+    EmptyInput,
+    InvalidLabelLength,
+    MissingIndexByte,
+    IndexOutOfBounds,
+    LabelExceedsInput,
+    MaxLengthExceeded,
+    InfiniteCompressionLoop,
+}
+
+struct DecodeDnsNameState {
+    // length of name
+    name_length: usize,
+    // number of labels in name
+    nlabels: usize,
+    // allows for keeping track of indices to prevent compression loops
+    visited: HashSet<u16>
+}
+
+impl DecodeDnsNameState {
+    fn new() -> Self {
+        Self { 
+            name_length: 0, 
+            nlabels: 0, 
+            visited: HashSet::new() 
+        }
+    }
+
+    fn add_label_length(&mut self, label_length: usize) -> usize {
+        self.name_length += label_length + if self.nlabels == 0 { 0 } else { 1 };
+        self.nlabels += 1;
+        self.name_length
+    }
+}
+
 pub fn decode_dns_name(input: &[u8], backlog: &[u8]) -> Option<Box<[u8]>> {
-    if input.len() == 0 {
-        return None
-        
-    } else {
-        if input[0] == 0 {
-            Some([].into())
+    decode_dns_name_helper(input, backlog, &mut DecodeDnsNameState::new()).ok().flatten()
+}
 
-        } else if (input[0] & 0xc0) == 0xc0 {
-            // compression
-            if input.len() < 2 { // insufficent bytes for the indicator
-                None
-            } else {
-                // decode further from the indicator
-                let indicator = (((input[0] & 0x3f) as u16) << 8) + (input[1] as u16);
-                decode_dns_name(&backlog[(indicator as usize)..], backlog)
-            }
+fn decode_dns_name_helper(input: &[u8], backlog: &[u8], state: &mut DecodeDnsNameState) -> Result<Option<Box<[u8]>>, DNSNameError> {
+    use DNSNameError::*;
 
-        } else {
-            // normal part read
-            let length = input[0] & 0x3f;
-            // get the part from input
-            if let Some(part) = input.get(1..(length as usize)+1) {
-                // recursively read the rest of input
-                match decode_dns_name(&input[(length as usize +1)..], backlog) {
-                    Some(other_parts) => {
-                        if other_parts.len() > 0 {
-                            // add this part to the recursively read part seperated by a dot
-                            let mut name = part.to_vec();
-                            name.push(b'.');
-                            name.extend_from_slice(&other_parts);
-                            Some(name.into())
-                        } else {
-                            // recursion reached end of name
-                            Some(part.into())
+    if input.len() > 0 {
+        // focus on the two most significant bits
+        match (input[0] & 0b11000000) >> 6 {
+            0b00 => {
+                // the two most significant bits are not set indicating the next 6 bits
+                // contain the length for the label
+                let length = input[0] as usize; // can at most be a value of 63 as we already checked the first two bits
+                if length == 0 {
+                    // a length of zero indicates the end of a name
+                    Ok(None)
+                // verify reading a new label doesn't exceed the max name length
+                } else if state.add_label_length(length) <= 255 {
+                    // the first 1 is for the encoded length, then the length of the label itself follows, 
+                    // after which we expect another byte indicating another label or the end of the name.
+                    if input.len() >= 1 + length + 1 {
+                        // read the label
+                        let mut name = (&input[1..=length as usize]).to_vec();
+                        // recursively continue reading after the label
+                        match decode_dns_name_helper(&input[1 + length..], backlog, state)? {
+                            // this was the final label
+                            None => Ok(Some(name.into())),
+                            // add other label(s)
+                            Some(other_label) => {
+                                name.push(b'.');
+                                name.extend_from_slice(&other_label);
+                                Ok(Some(name.into()))
+                            }
                         }
-                    },
-                    // there was nothing to read, so just return this part
-                    None => None
+                    } else {
+                        // the part exceeded the bounds of input
+                        Err(LabelExceedsInput)
+                    }
+                } else {
+                    Err(MaxLengthExceeded)
                 }
-            } else {
-                None
+            },
+            0b11 => {
+                // the two most siginificant bits are set, which means the other 6 bits 
+                // in combination with the next byte provide a index of 14 bits for
+                // compression
+                if input.len() >= 2 {
+                    // read two bytes as index, while ignoring the two most significant bits
+                    let index: u16 = (((input[0] & 0b00111111) as u16) << 8) + (input[1] as u16);
+                    // verify the index to be explored isn't already visited
+                    if state.visited.insert(index) {
+                        match backlog.get(index as usize..) {
+                            // recursively read from the index in the backlog
+                            Some(backlog_slice) => decode_dns_name_helper(backlog_slice, backlog, state),
+                            None => Err(IndexOutOfBounds)
+                        }
+                    } else {
+                        Err(InfiniteCompressionLoop)
+                    }
+                    
+                } else {
+                    Err(MissingIndexByte)
+                }
+            },
+            _ => {
+                // the most significant bits are either 0b10 or 0b01 which doesn't indicate
+                // compression, and is invalid for a label length as it would exceed 63
+                Err(InvalidLabelLength)
             }
         }
+    } else {
+        Err(EmptyInput)
     }
 }
 
@@ -130,12 +197,32 @@ mod test {
     use super::*;
 
     #[test]
-    fn simple() {
-        let input = b"\x06google\x03com\0";
+    fn single() {
+        let input = b"\x03com\0";
+        let result = b"com";
 
         assert_eq!(
+            decode_dns_name_helper(&input[..], &[], &mut DecodeDnsNameState::new()),
+            Ok(Some(result.to_vec().into_boxed_slice()))
+        );
+        assert_eq!(
             decode_dns_name(&input[..], &[]).as_deref().unwrap(),
-            b"google.com"
+            result
+        );
+    }
+    
+    #[test]
+    fn simple() {
+        let input = b"\x06google\x03com\0";
+        let result = b"google.com";
+
+        assert_eq!(
+            decode_dns_name_helper(&input[..], &[], &mut DecodeDnsNameState::new()),
+            Ok(Some(result.to_vec().into_boxed_slice()))
+        );
+        assert_eq!(
+            decode_dns_name(&input[..], &[]).as_deref().unwrap(),
+            result
         );
     }
 
@@ -143,23 +230,131 @@ mod test {
     fn empty() {
         let input = b"";
 
-        assert!(decode_dns_name(&input[..], &[]).is_none());
+        assert_eq!(
+            decode_dns_name_helper(&input[..], &[], &mut DecodeDnsNameState::new()),
+            Err(DNSNameError::EmptyInput)
+        );
+        assert_eq!(
+            decode_dns_name(&input[..], &[]).as_deref(),
+            None
+        );
     }
 
     #[test]
-    fn length_out_of_bounds() {
-        let input = b"\x03co\0";
+    fn invalid_part_length() {
+        let input1 = b"\x7fco\0";
+        let input2 = b"\x7fco\0";
+        
+        assert_eq!(
+            decode_dns_name_helper(&input1[..], &[], &mut DecodeDnsNameState::new()),
+            Err(DNSNameError::InvalidLabelLength)
+        );
+        assert_eq!(
+            decode_dns_name(&input1[..], &[]).as_deref(),
+            None
+        );
+        assert_eq!(
+            decode_dns_name_helper(&input2[..], &[], &mut DecodeDnsNameState::new()),
+            Err(DNSNameError::InvalidLabelLength)
+        );
+        assert_eq!(
+            decode_dns_name(&input2[..], &[]).as_deref(),
+            None
+        );
+    }
 
-        assert!(decode_dns_name(&input[..], &[]).is_none());
+    #[test]
+    fn missing_index_byte() {
+        let input = b"\xc0";
+
+        assert_eq!(
+            decode_dns_name_helper(&input[..], &[], &mut DecodeDnsNameState::new()),
+            Err(DNSNameError::MissingIndexByte)
+        );
+        assert_eq!(
+            decode_dns_name(&input[..], &[]).as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn index_out_of_bounds() {
+        let input = b"\xc0\xff";
+        
+        assert_eq!(
+            decode_dns_name_helper(&input[..], &[], &mut DecodeDnsNameState::new()),
+            Err(DNSNameError::IndexOutOfBounds)
+        );
+        assert_eq!(
+            decode_dns_name(&input[..], &[]).as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn label_exceeds_input() {
+        let input = b"\x03com";
+        
+        assert_eq!(
+            decode_dns_name_helper(&input[..], &[], &mut DecodeDnsNameState::new()),
+            Err(DNSNameError::LabelExceedsInput)
+        );
+        assert_eq!(
+            decode_dns_name(&input[..], &[]).as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn max_length_exceeded() {
+        let mut input = Vec::new();
+        for _ in 0..41 {
+            input.push(0x05);
+            input.extend_from_slice(b"hello");
+        }
+        input.extend_from_slice(b"\x06google\x03com\x00");
+
+        assert_eq!(
+            input.len()-2,
+            256
+        );
+        
+        assert_eq!(
+            decode_dns_name_helper(&input[..], &[], &mut DecodeDnsNameState::new()),
+            Err(DNSNameError::MaxLengthExceeded)
+        );
+        assert_eq!(
+            decode_dns_name(&input[..], &[]).as_deref(),
+            None
+        );
+    }
+
+    #[test]
+    fn infinite_compression_loop() {
+        let pkt = b"\xc0\x02\xc0\x00";
+        
+        assert_eq!(
+            decode_dns_name_helper(&pkt[..], &pkt[..], &mut DecodeDnsNameState::new()),
+            Err(DNSNameError::InfiniteCompressionLoop)
+        );
+        assert_eq!(
+            decode_dns_name(&pkt[..], &pkt[..]).as_deref(),
+            None
+        );
     }
 
     #[test]
     fn simple_backref() {
         let pkt = b"\x06google\x03com\0\x03www\xC0\x00";
+        let result = b"www.google.com";
 
         assert_eq!(
+            decode_dns_name_helper(&pkt[12..], &pkt[..], &mut DecodeDnsNameState::new()),
+            Ok(Some(result.to_vec().into_boxed_slice()))
+        );
+        assert_eq!(
             decode_dns_name(&pkt[12..], &pkt[..]).as_deref().unwrap(),
-            b"www.google.com"
+            result
         );
     }
 }
